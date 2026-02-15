@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { lovable } from '@/integrations/lovable';
@@ -18,37 +18,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    // IMPORTANT: onAuthStateChange must be synchronous to avoid race conditions
+    // 1. Subscribe to auth changes FIRST (before getSession)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
+      (_event, newSession) => {
+        console.log('[Auth] onAuthStateChange:', _event, 'session:', !!newSession, 'token:', !!newSession?.access_token);
+        setSession(newSession);
+        // Always mark loading done when auth state fires
         setLoading(false);
+        initializedRef.current = true;
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
+    // 2. Explicitly restore session on mount
+    supabase.auth.getSession().then(({ data: { session: existingSession }, error }) => {
+      console.log('[Auth] getSession result:', 'session:', !!existingSession, 'token:', !!existingSession?.access_token, 'error:', error);
+      // Only use getSession result if onAuthStateChange hasn't fired yet
+      if (!initializedRef.current) {
+        setSession(existingSession);
+        setLoading(false);
+        initializedRef.current = true;
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Separate effect for admin check to avoid async work in onAuthStateChange
+  // 3. Admin check in separate effect — never throws, never clears session
   useEffect(() => {
-    if (session?.user) {
-      supabase.rpc('has_role', {
-        _user_id: session.user.id,
-        _role: 'admin',
-      }).then(({ data }) => {
-        setIsAdmin(!!data);
-      });
-    } else {
+    if (!session?.user) {
       setIsAdmin(false);
+      return;
     }
-  }, [session]);
+    supabase.rpc('has_role', {
+      _user_id: session.user.id,
+      _role: 'admin',
+    }).then(({ data, error }) => {
+      if (error) {
+        console.warn('[Auth] Admin check failed (non-fatal):', error.message);
+      }
+      setIsAdmin(!!data);
+    });
+  }, [session?.user?.id]);
 
   const signInWithGoogle = async () => {
     await lovable.auth.signInWithOAuth('google', {
