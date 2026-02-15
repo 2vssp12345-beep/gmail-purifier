@@ -20,40 +20,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
+    // IMPORTANT: onAuthStateChange must be synchronous to avoid race conditions
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      (_event, session) => {
         setSession(session);
-        if (session?.user) {
-          // Check admin role
-          const { data } = await supabase.rpc('has_role', {
-            _user_id: session.user.id,
-            _role: 'admin',
-          });
-          setIsAdmin(!!data);
-        } else {
-          setIsAdmin(false);
-        }
         setLoading(false);
       }
     );
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session?.user) {
-        supabase.rpc('has_role', {
-          _user_id: session.user.id,
-          _role: 'admin',
-        }).then(({ data }) => {
-          setIsAdmin(!!data);
-          setLoading(false);
-        });
-      } else {
-        setLoading(false);
-      }
+      setLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Separate effect for admin check to avoid async work in onAuthStateChange
+  useEffect(() => {
+    if (session?.user) {
+      supabase.rpc('has_role', {
+        _user_id: session.user.id,
+        _role: 'admin',
+      }).then(({ data }) => {
+        setIsAdmin(!!data);
+      });
+    } else {
+      setIsAdmin(false);
+    }
+  }, [session]);
 
   const signInWithGoogle = async () => {
     await lovable.auth.signInWithOAuth('google', {
