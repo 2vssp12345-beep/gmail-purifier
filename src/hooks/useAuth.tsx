@@ -17,53 +17,39 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const initializedRef = useRef(false);
+  const readyRef = useRef(false);
 
   useEffect(() => {
-    // 1. Subscribe to auth changes FIRST (before getSession)
+    // 1. Listen for auth state changes (synchronous, no async work)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
-        console.log('[Auth] onAuthStateChange:', _event, 'session:', !!newSession, 'token:', !!newSession?.access_token);
+        console.log('[Auth] stateChange:', _event, !!newSession);
         setSession(newSession);
-        // Always mark loading done when auth state fires
-        setLoading(false);
-        initializedRef.current = true;
+        if (!readyRef.current) {
+          readyRef.current = true;
+          setLoading(false);
+        }
       }
     );
 
-    // 2. Explicitly restore session on mount
-    supabase.auth.getSession().then(({ data: { session: existingSession }, error }) => {
-      console.log('[Auth] getSession result:', 'session:', !!existingSession, 'token:', !!existingSession?.access_token, 'error:', error);
-      // Only use getSession result if onAuthStateChange hasn't fired yet
-      if (!initializedRef.current) {
-        setSession(existingSession);
+    // 2. Explicitly hydrate session from localStorage
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      console.log('[Auth] getSession:', !!s, 'token:', !!s?.access_token);
+      if (!readyRef.current) {
+        setSession(s);
+        readyRef.current = true;
         setLoading(false);
-        initializedRef.current = true;
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // 3. Admin check in separate effect — never throws, never clears session
-  useEffect(() => {
-    if (!session?.user) {
-      setIsAdmin(false);
-      return;
-    }
-    supabase.rpc('has_role', {
-      _user_id: session.user.id,
-      _role: 'admin',
-    }).then(({ data, error }) => {
-      if (error) {
-        console.warn('[Auth] Admin check failed (non-fatal):', error.message);
-      }
-      setIsAdmin(!!data);
-    });
-  }, [session?.user?.id]);
+  // Admin check fully bypassed for now
+  const isAdmin = false;
 
   const signInWithGoogle = async () => {
+    // Use lovable OAuth which handles top-level redirect
     await lovable.auth.signInWithOAuth('google', {
       redirect_uri: window.location.origin,
       extraParams: {
