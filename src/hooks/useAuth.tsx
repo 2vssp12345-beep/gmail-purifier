@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useRef, ReactNode } fro
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { lovable } from '@/integrations/lovable';
+import { ADMIN_EMAIL } from '@/lib/constants';
 
 interface AuthContextType {
   session: Session | null;
@@ -45,8 +46,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Admin check fully bypassed for now
-  const isAdmin = false;
+  // Admin check based on email match
+  const isAdmin = session?.user?.email === ADMIN_EMAIL;
 
   const signInWithGoogle = async () => {
     // Use lovable OAuth which handles top-level redirect
