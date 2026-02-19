@@ -30,10 +30,6 @@ serve(async (req) => {
     const { rescan } = await req.json().catch(() => ({ rescan: false }));
 
     // Get Google OAuth token from user's identity
-    const { data: { session } } = await supabase.auth.admin.getUserById(user.id);
-    
-    // We need to get the provider token from the user's session
-    // The auth header token is the user's JWT, we need to get the Google token
     const identities = user.identities || [];
     const googleIdentity = identities.find((i: any) => i.provider === 'google');
     
@@ -43,21 +39,7 @@ serve(async (req) => {
       });
     }
 
-    // Get the provider token from the session
-    // We'll use the service role to get the user's session data
-    const { data: sessions } = await supabase.auth.admin.listUserSessions(user.id);
-
-    // For now, we'll try to use the provider_token passed from the client
-    // The client should pass it in the body
-    const body = await req.json().catch(() => ({}));
-    
-    // Try to get Google access token - it's stored temporarily in the session
-    // We need to refresh it using the refresh token stored by Supabase Auth
     let accessToken: string | null = null;
-    
-    // Use the identity's provider access token or refresh
-    // Supabase stores the Google refresh token, we can use it
-    const identityData = googleIdentity.identity_data;
     
     // We need the Google refresh token from Supabase's internal storage
     // Let's try to get it from the raw_user_meta_data
