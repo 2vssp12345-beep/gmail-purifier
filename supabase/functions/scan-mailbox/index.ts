@@ -27,64 +27,49 @@ serve(async (req) => {
       });
     }
 
-    const { rescan } = await req.json().catch(() => ({ rescan: false }));
+    // Parse request body - get provider tokens passed from frontend
+    const body = await req.json().catch(() => ({}));
+    const { rescan = false, provider_token, provider_refresh_token } = body;
 
-    // Get Google OAuth token from user's identity
-    const identities = user.identities || [];
-    const googleIdentity = identities.find((i: any) => i.provider === 'google');
-    
-    if (!googleIdentity) {
-      return new Response(JSON.stringify({ error: 'No Google account linked' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    // Use provider_token from frontend session as primary source
+    let accessToken: string | null = provider_token || null;
+    const refreshToken: string | null = provider_refresh_token || null;
+
+    // If we have a refresh token but no access token, refresh it
+    if (!accessToken && refreshToken) {
+      const googleClientId = Deno.env.get('GOOGLE_CLIENT_ID');
+      const googleClientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+
+      if (googleClientId && googleClientSecret) {
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: googleClientId,
+            client_secret: googleClientSecret,
+            refresh_token: refreshToken,
+            grant_type: 'refresh_token',
+          }),
+        });
+        const tokenData = await tokenRes.json();
+        accessToken = tokenData.access_token || null;
+      }
     }
-
-    let accessToken: string | null = null;
-    
-    // We need the Google refresh token from Supabase's internal storage
-    // Let's try to get it from the raw_user_meta_data
-    const refreshToken = user.app_metadata?.provider_refresh_token || 
-                          user.user_metadata?.provider_refresh_token;
-    
-    if (!refreshToken) {
-      // Try using the current access token from identity
-      // This might be expired, but let's try
-      return new Response(JSON.stringify({ 
-        error: 'Google token expired. Please sign out and sign in again to re-authorize Gmail access.' 
-      }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Refresh the Google access token
-    const googleClientId = Deno.env.get('GOOGLE_CLIENT_ID');
-    const googleClientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
-    
-    if (!googleClientId || !googleClientSecret) {
-      return new Response(JSON.stringify({ error: 'Google OAuth not configured' }), {
-        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: googleClientId,
-        client_secret: googleClientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    });
-
-    const tokenData = await tokenRes.json();
-    accessToken = tokenData.access_token;
 
     if (!accessToken) {
       return new Response(JSON.stringify({ 
-        error: 'Failed to refresh Google token. Please sign in again.' 
+        error: 'Could not obtain Google access token. Please sign out and sign in again to grant Gmail access.' 
       }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Verify Google identity exists
+    const identities = user.identities || [];
+    const googleIdentity = identities.find((i: any) => i.provider === 'google');
+    if (!googleIdentity) {
+      return new Response(JSON.stringify({ error: 'No Google account linked' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -113,11 +98,9 @@ serve(async (req) => {
       });
     }
 
-    // Start async scan in the background
-    // We return immediately and update progress via database
     const scanId = scan.id;
 
-    // Process in background using EdgeRuntime
+    // Process in background
     (async () => {
       try {
         let pageToken = '';
@@ -125,7 +108,6 @@ serve(async (req) => {
         let processedMessages = 0;
         const allMessages: any[] = [];
 
-        // First pass: get message list
         await updateProgress(supabase, scanId, 5, 'Fetching message list...');
 
         do {
@@ -140,18 +122,16 @@ serve(async (req) => {
           }
           totalMessages = listData.resultSizeEstimate || allMessages.length;
           pageToken = listData.nextPageToken || '';
-        } while (pageToken && allMessages.length < 10000); // Cap at 10k for safety
+        } while (pageToken && allMessages.length < 10000);
 
         await updateProgress(supabase, scanId, 10, `Found ${allMessages.length} messages. Processing...`);
 
-        // Process messages in batches
         const batchSize = 50;
         const emailRows: any[] = [];
         
         for (let i = 0; i < allMessages.length; i += batchSize) {
           const batch = allMessages.slice(i, i + batchSize);
           
-          // Use batch get for efficiency
           const batchResults = await Promise.all(
             batch.map(async (msg: any) => {
               try {
@@ -175,7 +155,6 @@ serve(async (req) => {
             const subjectHeader = headers.find((h: any) => h.name === 'Subject')?.value || '';
             const unsubHeader = headers.find((h: any) => h.name === 'List-Unsubscribe')?.value || '';
 
-            // Parse sender
             const emailMatch = fromHeader.match(/<(.+?)>/) || [null, fromHeader];
             const senderEmail = (emailMatch[1] || fromHeader).trim().toLowerCase();
             const senderName = fromHeader.replace(/<.*>/, '').trim().replace(/"/g, '') || null;
@@ -203,7 +182,6 @@ serve(async (req) => {
             `Processed ${processedMessages}/${allMessages.length} messages...`);
         }
 
-        // Insert email metadata in batches
         await updateProgress(supabase, scanId, 85, 'Storing email metadata...');
         
         for (let i = 0; i < emailRows.length; i += 500) {
@@ -211,7 +189,6 @@ serve(async (req) => {
           await supabase.from('email_metadata').insert(batch);
         }
 
-        // Compute sender summaries
         await updateProgress(supabase, scanId, 90, 'Computing sender summaries...');
 
         const senderMap = new Map<string, any>();
@@ -248,12 +225,10 @@ serve(async (req) => {
           await supabase.from('sender_summary').insert(summaryRows.slice(i, i + 500));
         }
 
-        // Compute stats
         const deletableSenders = summaryRows.filter(s => s.unopened_percentage >= 75);
         const deletableMails = deletableSenders.reduce((sum, s) => sum + s.total_emails, 0);
         const recoverableSpace = deletableSenders.reduce((sum, s) => sum + s.total_size_bytes, 0);
 
-        // Update scan as completed
         await supabase.from('scan_history').update({
           status: 'completed',
           completed_at: new Date().toISOString(),
