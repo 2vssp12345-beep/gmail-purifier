@@ -1,0 +1,7 @@
+project_id = "zxpcpbrhqzapizooxgbl"
+
+[functions.scan-mailbox]
+verify_jwt = false
+
+[functions.purge-emails]
+verify_jwt = false
