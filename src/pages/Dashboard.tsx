@@ -8,19 +8,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { formatBytes, formatDate } from '@/lib/format';
-import { RefreshCw, Search, Eye, Inbox } from 'lucide-react';
+import { RefreshCw, Search, Eye, Inbox, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Tables } from '@/integrations/supabase/types';
 
 type ScanHistory = Tables<'scan_history'>;
 
 const Dashboard = () => {
-  const { user, session } = useAuth();
+  const { user, session, signOut } = useAuth();
   const navigate = useNavigate();
   const [scans, setScans] = useState<ScanHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [activeScan, setActiveScan] = useState<ScanHistory | null>(null);
+
+  // Check if session has provider_token (Gmail access)
+  const hasGmailAccess = !!session?.provider_token;
 
   const fetchScans = async () => {
     if (!user) return;
@@ -77,24 +80,36 @@ const Dashboard = () => {
   }, [activeScan?.id]);
 
   const startScan = async (rescan = false) => {
-    if (!session?.provider_token && !session?.access_token) {
-      toast.error('Please sign in again to grant Gmail access');
+    // Get fresh session to have provider_token
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    
+    if (!currentSession) {
+      toast.error('Not authenticated. Please sign in again.');
+      return;
+    }
+
+    if (!currentSession.provider_token) {
+      toast.error('Gmail access not available. Please sign out and sign back in to grant access.');
       return;
     }
 
     setScanning(true);
     try {
       const res = await supabase.functions.invoke('scan-mailbox', {
-        body: { rescan },
+        body: { 
+          rescan,
+          provider_token: currentSession.provider_token,
+          provider_refresh_token: currentSession.provider_refresh_token,
+        },
       });
 
       if (res.error) {
-        toast.error(res.error.message || 'Scan failed');
+        const errorMsg = res.data?.error || res.error.message || 'Scan failed';
+        toast.error(errorMsg);
         setScanning(false);
       } else {
         const scanId = res.data?.scan_id;
         if (scanId) {
-          // Fetch the newly created scan to track it
           const { data } = await supabase
             .from('scan_history')
             .select('*')
@@ -116,6 +131,22 @@ const Dashboard = () => {
     <div className="min-h-screen bg-background">
       <AppHeader />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        {/* Gmail Access Warning Banner */}
+        {!hasGmailAccess && (
+          <Card className="mb-6 border-destructive/50 bg-destructive/10">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-destructive">Gmail access not available</p>
+                <p className="text-xs text-muted-foreground">Please sign out and sign back in to grant Gmail access for scanning.</p>
+              </div>
+              <Button variant="destructive" size="sm" onClick={signOut}>
+                Sign Out & Re-authorize
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
@@ -123,12 +154,12 @@ const Dashboard = () => {
           </div>
           <div className="flex gap-2">
             {hasScans && (
-              <Button variant="outline" onClick={() => startScan(true)} disabled={scanning}>
+              <Button variant="outline" onClick={() => startScan(true)} disabled={scanning || !hasGmailAccess}>
                 <RefreshCw className={`mr-2 h-4 w-4 ${scanning ? 'animate-spin' : ''}`} />
                 Rescan
               </Button>
             )}
-            <Button onClick={() => startScan(false)} disabled={scanning}>
+            <Button onClick={() => startScan(false)} disabled={scanning || !hasGmailAccess}>
               <Search className="mr-2 h-4 w-4" />
               {hasScans ? 'New Scan' : 'Scan Mailbox'}
             </Button>
@@ -160,7 +191,7 @@ const Dashboard = () => {
               <p className="mb-4 text-sm text-muted-foreground">
                 Scan your mailbox to identify clutter and free up space
               </p>
-              <Button onClick={() => startScan(false)}>
+              <Button onClick={() => startScan(false)} disabled={!hasGmailAccess}>
                 <Search className="mr-2 h-4 w-4" />
                 Scan Mailbox
               </Button>
