@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
-import { lovable } from '@/integrations/lovable';
 import { ADMIN_EMAIL } from '@/lib/constants';
 
 interface AuthContextType {
@@ -61,15 +60,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = session?.user?.email === ADMIN_EMAIL;
 
   const signInWithGoogle = async () => {
-    // Use lovable OAuth which handles top-level redirect
-    await lovable.auth.signInWithOAuth('google', {
-      redirect_uri: window.location.origin,
-      extraParams: {
-        access_type: 'offline',
-        prompt: 'consent',
-        scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        scopes: 'openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify',
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+        redirectTo: `${window.location.origin}/`,
       },
     });
+
+    if (error) throw error;
   };
 
   const signOut = async () => {
