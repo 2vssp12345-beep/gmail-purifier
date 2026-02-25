@@ -29,7 +29,9 @@ const Dashboard = () => {
   };
 
   // Check if session has provider_token (Gmail access)
-  const hasGmailAccess = !!getProviderTokens().provider_token;
+  const { provider_token, provider_refresh_token } = getProviderTokens();
+  const hasGmailAccess = !!provider_token;
+  const showBanner = !provider_token && !provider_refresh_token;
 
   const fetchScans = async () => {
     if (!user) return;
@@ -143,7 +145,7 @@ const Dashboard = () => {
       <AppHeader />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         {/* Gmail Access Warning Banner */}
-        {!hasGmailAccess && (
+        {showBanner && (
           <Card className="mb-6 border-destructive/50 bg-destructive/10">
             <CardContent className="flex items-center gap-3 py-4">
               <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
