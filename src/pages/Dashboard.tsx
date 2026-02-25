@@ -22,8 +22,14 @@ const Dashboard = () => {
   const [scanning, setScanning] = useState(false);
   const [activeScan, setActiveScan] = useState<ScanHistory | null>(null);
 
+  const getProviderTokens = () => {
+    const provider_token = session?.provider_token || localStorage.getItem('google_provider_token');
+    const provider_refresh_token = session?.provider_refresh_token || localStorage.getItem('google_provider_refresh_token');
+    return { provider_token, provider_refresh_token };
+  };
+
   // Check if session has provider_token (Gmail access)
-  const hasGmailAccess = !!session?.provider_token;
+  const hasGmailAccess = !!getProviderTokens().provider_token;
 
   const fetchScans = async () => {
     if (!user) return;
@@ -88,7 +94,9 @@ const Dashboard = () => {
       return;
     }
 
-    if (!currentSession.provider_token) {
+    const { provider_token, provider_refresh_token } = getProviderTokens();
+
+    if (!provider_token) {
       toast.error('Gmail access not available. Please sign out and sign back in to grant access.');
       return;
     }
@@ -96,10 +104,13 @@ const Dashboard = () => {
     setScanning(true);
     try {
       const res = await supabase.functions.invoke('scan-mailbox', {
+        headers: {
+          Authorization: `Bearer ${currentSession.access_token}`,
+        },
         body: { 
           rescan,
-          provider_token: currentSession.provider_token,
-          provider_refresh_token: currentSession.provider_refresh_token,
+          provider_token,
+          provider_refresh_token,
         },
       });
 

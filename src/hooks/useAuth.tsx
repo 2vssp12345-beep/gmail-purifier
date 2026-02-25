@@ -25,6 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
         console.log('[Auth] stateChange:', _event, !!newSession);
+        // Persist provider tokens before they disappear on refresh
+        if ((_event === 'SIGNED_IN' || _event === 'INITIAL_SESSION') && newSession?.provider_token) {
+          localStorage.setItem('google_provider_token', newSession.provider_token);
+          if (newSession.provider_refresh_token) {
+            localStorage.setItem('google_provider_refresh_token', newSession.provider_refresh_token);
+          }
+        }
+        if (_event === 'SIGNED_OUT') {
+          localStorage.removeItem('google_provider_token');
+          localStorage.removeItem('google_provider_refresh_token');
+        }
         setSession(newSession);
         if (!readyRef.current) {
           readyRef.current = true;
